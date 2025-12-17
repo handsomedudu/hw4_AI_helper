@@ -81,7 +81,7 @@ def generate_answer(query, context):
     Your answer (in Traditional Chinese):
     """
     try:
-        model = genai.GenerativeModel('gemini-pro')
+        model = genai.GenerativeModel('gemini-1.5-flash')
         response = model.generate_content(prompt)
         return response.text
     except Exception as e:
