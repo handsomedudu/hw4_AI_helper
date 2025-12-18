@@ -7,15 +7,17 @@ import faiss
 import google.generativeai as genai
 import time
 
-# --- 1. 從 Secrets 安全讀取 API Key ---
+# --- 1. 從 Streamlit Secrets 讀取 API Key ---
 if "GOOGLE_API_KEY" in st.secrets:
     api_key = st.secrets["GOOGLE_API_KEY"]
     genai.configure(api_key=api_key)
 else:
-    st.error("❌ 錯誤：未在 Streamlit Secrets 中找到 GOOGLE_API_KEY。")
+    st.error("❌ 錯誤：未在 Streamlit Secrets 中設定 GOOGLE_API_KEY。")
     st.stop()
 
 EMBEDDING_MODEL_NAME = 'paraphrase-multilingual-MiniLM-L12-v2'
+
+# --- 核心功能函式 ---
 
 @st.cache_resource
 def load_embedding_model():
@@ -30,6 +32,7 @@ def create_faiss_index(_embeddings):
 
 def load_documents(folder_path):
     doc_texts, doc_names = [], []
+    # 僅讀取 .docx
     files = [f for f in os.listdir(folder_path) if f.endswith('.docx') and not f.startswith('~$')]
     for filename in files:
         try:
@@ -43,27 +46,32 @@ def load_documents(folder_path):
     return doc_names, doc_texts
 
 def generate_answer(query, context):
-    """具備自動切換模型的生成函式"""
-    # 嘗試模型優先順序
-    model_candidates = ["models/gemini-1.5-flash", "models/gemini-2.0-flash", "models/gemini-pro"]
+    """
+    自動切換模型邏輯：解決 404 找不到模型或 429 配額滿的問題
+    """
+    # 根據您的診斷清單，設定優先順序
+    model_candidates = [
+        "models/gemini-2.0-flash", 
+        "models/gemini-flash-latest",
+        "models/gemini-1.5-flash"
+    ]
     
-    prompt = f"你是一位專業的放電機助手。請根據以下內容回答問題，若無答案請說不知道：\n\n{context}\n\n問題：{query}\n回答（繁體中文）："
+    prompt = f"你是一位專業的放電機助手。請根據手冊回答問題：\n\n{context}\n\n問題：{query}\n回答（繁體中文）："
 
-    last_error = ""
     for model_name in model_candidates:
         try:
             model = genai.GenerativeModel(model_name)
             response = model.generate_content(prompt)
             return response.text, model_name
         except Exception as e:
-            last_error = str(e)
-            if "429" in last_error:
-                # 如果是配額問題，嘗試下一個模型
+            err_msg = str(e)
+            # 如果是 404 (找不到模型) 或 429 (配額滿)，則嘗試清單中的下一個模型
+            if "404" in err_msg or "429" in err_msg:
                 continue
             else:
-                return f"發生錯誤：{last_error}", model_name
-
-    return f"所有可用模型配額皆已耗盡，請稍後再試。最後錯誤：{last_error}", "None"
+                return f"產生答案時發生非預期錯誤：{err_msg}", "Error"
+                
+    return "所有可用模型均無法服務 (404 或 429)，請稍後再試。", "None"
 
 # --- 初始化 ---
 st.set_page_config(page_title="放電機 AI 助理", page_icon="⚡")
@@ -76,7 +84,7 @@ if 'initialized' not in st.session_state:
         doc_names, doc_texts = load_documents(current_folder)
         
         if not doc_texts:
-            st.error("找不到 .docx 檔案！")
+            st.error("找不到可讀取的 .docx 檔案！請確認檔案格式正確。")
             st.stop()
             
         paragraphs = []
@@ -87,9 +95,11 @@ if 'initialized' not in st.session_state:
         st.session_state.chunks = paragraphs
         st.session_state.faiss_index = create_faiss_index(np.array(embeddings))
         st.session_state.initialized = True
+        st.success(f"✅ 成功載入 {len(doc_names)} 份手冊。")
 
 # --- UI ---
-query = st.text_input("請輸入操作問題：")
+query = st.text_input("請輸入操作問題：", placeholder="例如：如何設定極間電壓？")
+
 if st.button("詢問 AI"):
     if query:
         with st.spinner("搜尋答案中..."):
@@ -98,5 +108,7 @@ if st.button("詢問 AI"):
             context = "\n\n".join([st.session_state.chunks[i] for i in indices[0]])
             
             answer, used_model = generate_answer(query, context)
-            st.markdown(f"### 🤖 AI 的回答 (使用模型: {used_model})")
+            st.markdown(f"### 🤖 AI 回答 (使用模型: {used_model})")
             st.info(answer)
+    else:
+        st.warning("請輸入問題內容。")
