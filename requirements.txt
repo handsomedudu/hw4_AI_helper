@@ -4,4 +4,4 @@ sentence-transformers
 faiss-cpu
 torch
 numpy
-google-generativeai
+google-generativeai>=0.7.2
